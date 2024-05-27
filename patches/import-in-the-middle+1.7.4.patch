@@ -1,0 +1,124 @@
+diff --git a/node_modules/import-in-the-middle/hook.js b/node_modules/import-in-the-middle/hook.js
+index 79a2e5b..fe30ad4 100644
+--- a/node_modules/import-in-the-middle/hook.js
++++ b/node_modules/import-in-the-middle/hook.js
+@@ -3,6 +3,7 @@
+ // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2021 Datadog, Inc.
+ 
+ const { randomBytes } = require('crypto')
++const { URL } = require('url')
+ const specifiers = new Map()
+ const isWin = process.platform === 'win32'
+ 
+@@ -91,6 +92,24 @@ function isStarExportLine (line) {
+   return /^\* from /.test(line)
+ }
+ 
++function isBareSpecifier (specifier) {
++  // Relative and absolute paths are not bare specifiers.
++  if (
++    specifier.startsWith('.') ||
++    specifier.startsWith('/')) {
++    return false
++  }
++
++  // Valid URLs are not bare specifiers. (file:, http:, node:, etc.)
++  try {
++    // eslint-disable-next-line no-new
++    new URL(specifier)
++    return false
++  } catch (err) {
++    return true
++  }
++}
++
+ /**
+  * @typedef {object} ProcessedModule
+  * @property {string[]} imports A set of ESM import lines to be added to the
+@@ -128,6 +147,7 @@ async function processModule ({
+   srcUrl,
+   context,
+   parentGetSource,
++  parentResolve,
+   ns = 'namespace',
+   defaultAs = 'default'
+ }) {
+@@ -154,13 +174,22 @@ async function processModule ({
+     if (isStarExportLine(n) === true) {
+       const [, modFile] = n.split('* from ')
+       const normalizedModName = normalizeModName(modFile)
+-      const modUrl = new URL(modFile, srcUrl).toString()
+       const modName = Buffer.from(modFile, 'hex') + Date.now() + randomBytes(4).toString('hex')
+ 
++      let modUrl
++      if (isBareSpecifier(modFile)) {
++        // Bare specifiers need to be resolved relative to the parent module.
++        const result = await parentResolve(modFile, { parentURL: srcUrl })
++        modUrl = result.url
++      } else {
++        modUrl = new URL(modFile, srcUrl).toString()
++      }
++
+       const data = await processModule({
+         srcUrl: modUrl,
+         context,
+         parentGetSource,
++        parentResolve,
+         ns: `$${modName}`,
+         defaultAs: normalizedModName
+       })
+@@ -180,7 +209,7 @@ async function processModule ({
+       // needs to utilize that new name while being initialized from the
+       // corresponding origin namespace.
+       const renamedExport = matches[2]
+-      setters.set(`$${renamedExport}${ns}`, `
++      setters.set(`$${renamedExport}`, `
+       let $${renamedExport} = ${ns}.default
+       export { $${renamedExport} as ${renamedExport} }
+       set.${renamedExport} = (v) => {
+@@ -191,7 +220,7 @@ async function processModule ({
+       continue
+     }
+ 
+-    setters.set(`$${n}` + ns, `
++    setters.set(`$${n}`, `
+     let $${n} = ${ns}.${n}
+     export { $${n} as ${n} }
+     set.${n} = (v) => {
+@@ -229,7 +258,19 @@ function addIitm (url) {
+ }
+ 
+ function createHook (meta) {
++  let cachedResolve
++  const iitmURL = new URL('lib/register.js', meta.url).toString()
++
+   async function resolve (specifier, context, parentResolve) {
++    cachedResolve = parentResolve
++    // See github.com/DataDog/import-in-the-middle/pull/76.
++    if (specifier === iitmURL) {
++      return {
++        url: specifier,
++        shortCircuit: true
++      }
++    }
++
+     const { parentURL = '' } = context
+     const newSpecifier = deleteIitm(specifier)
+     if (isWin && parentURL.indexOf('file:node') === 0) {
+@@ -262,14 +303,14 @@ function createHook (meta) {
+     }
+   }
+ 
+-  const iitmURL = new URL('lib/register.js', meta.url).toString()
+   async function getSource (url, context, parentGetSource) {
+     if (hasIitm(url)) {
+       const realUrl = deleteIitm(url)
+       const { imports, namespaces, setters: mapSetters } = await processModule({
+         srcUrl: realUrl,
+         context,
+-        parentGetSource
++        parentGetSource,
++        parentResolve: cachedResolve
+       })
+       const setters = Array.from(mapSetters.values())
+ 

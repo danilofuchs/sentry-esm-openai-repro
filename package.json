@@ -1,0 +1,27 @@
+{
+  "name": "sentry-esm-openai-repro",
+  "version": "1.0.0",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node --import ./instrumentation.js index.js",
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "postinstall": "patch-package"
+  },
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "@sentry/node": "^8.4.0",
+    "openai": "^4.47.1"
+  },
+  "devDependencies": {
+    "patch-package": "^8.0.0"
+  },
+  "resolutions": {
+    "import-in-the-middle": "1.7.4"
+  },
+  "overrides": {
+    "import-in-the-middle": "1.7.4"
+  }
+}
